@@ -1,14 +1,22 @@
+# --- LLM Core & RAG ---
 langchain
 langchain-openai
 langchain-community
 langgraph
-faiss-cpu
 pypdf
 python-dotenv
-streamlit
 tiktoken
+faiss-cpu
+sentence-transformers
+langchain-huggingface
+
+# --- UI & Output ---
+streamlit
 reportlab
+
+# --- Observability (Phoenix Tracing) ---
 arize-phoenix
 openinference-instrumentation-langchain
+openinference-instrumentation-openai
 opentelemetry-sdk
 opentelemetry-exporter-otlp
