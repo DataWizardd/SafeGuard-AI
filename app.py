@@ -1,33 +1,51 @@
 import streamlit as st
-import os
-import time
-from agent_graph import app_graph
+import phoenix as px
+from phoenix.otel import register
+import os 
+# ---------------------------------------------------------
+# [Phoenix 설정] 최신 register 방식 적용
+# ---------------------------------------------------------
+@st.cache_resource
+def setup_phoenix():
+    # 1. Phoenix 서버 시작 (UI 실행)
+    session = px.launch_app()
+    
+    # 2. Tracer 등록 및 자동 기기화 (Auto-Instrumentation)
+    # 설치된 라이브러리(LangChain, OpenAI)를 자동으로 감지해서 추적합니다.
+    register(
+        project_name="SafeGuard-AI",  # <--- 요청하신 프로젝트명
+        endpoint="http://localhost:6006/v1/traces",
+        auto_instrument=True
+    )
+    
+    print(f"🦅 Phoenix가 실행되었습니다: {session.url}")
+    return session
+
+# Phoenix 실행 (반드시 다른 import보다 먼저 실행되어야 함)
+phoenix_session = setup_phoenix()
+
+# ---------------------------------------------------------
+# [중요] Phoenix 설정 완료 후 그래프 가져오기
+# ---------------------------------------------------------
+from agent_graph import app_graph  # <--- 위치 중요!
 
 st.set_page_config(page_title="SafeGuard-AI", layout="wide")
-
 st.title("🛡️ SafeGuard-AI (Smart Factory Safety)")
 st.caption("제조 현장 작업 허가 및 위험성 평가 자동화 시스템")
 
-# 스타일 커스텀 (에이전트 박스 디자인)
-st.markdown("""
-<style>
-    .agent-box {
-        padding: 15px;
-        border-radius: 10px;
-        margin-bottom: 10px;
-        border: 1px solid #e0e0e0;
-    }
-    .agent-title {
-        font-weight: bold;
-        font-size: 1.1em;
-        margin-bottom: 5px;
-    }
-</style>
-""", unsafe_allow_html=True)
+# [사이드바]
+with st.sidebar:
+    st.header("🔧 개발자 도구")
+    st.success("🦅 Phoenix Tracing 활성화됨")
+    if phoenix_session:
+        st.link_button("🚀 추적 대시보드 열기", phoenix_session.url)
+    st.divider()
 
+# [메인 로직]
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# 이전 대화 출력
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         if msg.get("is_html"):
@@ -35,13 +53,13 @@ for msg in st.session_state.messages:
         else:
             st.write(msg["content"])
 
-if prompt := st.chat_input("작업 내용을 입력하세요 (예: 12시 30분에 톨루엔 탱크 배관 용접 작업 예정)"):
+# 사용자 입력 처리
+if prompt := st.chat_input("작업 내용을 입력하세요..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.write(prompt)
 
     with st.chat_message("assistant"):
-        # 전체 프로세스 상태창
         status_container = st.container(border=True)
         status_text = status_container.empty()
         
@@ -50,13 +68,12 @@ if prompt := st.chat_input("작업 내용을 입력하세요 (예: 12시 30분�
         pdf_path = None
         
         try:
-            # LangGraph 스트리밍 시작
             status_text.info("🚀 안전 분석 프로세스를 시작합니다...")
             
+            # 그래프 실행
             for output in app_graph.stream(inputs):
                 for key, value in output.items():
-                    
-                    # 1. Coordinator (조정관)
+                    # --- Coordinator ---
                     if key == "coordinator":
                         with status_container:
                             if value.get("needs_more_info"):
@@ -64,63 +81,60 @@ if prompt := st.chat_input("작업 내용을 입력하세요 (예: 12시 30분�
                                 final_res = value['messages'][0]
                             else:
                                 st.success("🤖 **Main Coordinator:** 작업 의도 파악 완료. 규정 검색 에이전트를 호출합니다.")
-                                time.sleep(0.5) # 시각적 효과를 위한 짧은 대기
 
-                    # 2. Regulation Agent (규정 검색) - 디테일하게 보여주기
+                    # --- Regulation Agent ---
                     elif key == "regulation_finder":
                         with status_container:
                             st.info("📚 **Regulation Agent:** 관련 법령 및 사내 규정을 검색했습니다.")
-                            
-                            # 검색된 문서를 파싱해서 깔끔하게 보여줌
                             raw_context = value['context']
-                            docs = raw_context.split("\n\n---\n\n") # 아까 넣은 구분자로 쪼개기
-                            
+                            if "\n\n---\n\n" in raw_context:
+                                docs = raw_context.split("\n\n---\n\n")
+                            else:
+                                docs = [raw_context]
+
                             with st.expander(f"🔍 검색된 근거 자료 ({len(docs)}건) 상세보기"):
                                 for i, doc in enumerate(docs):
-                                    # 파일명과 내용 분리
                                     lines = doc.split("\n")
                                     source_line = lines[0] if lines else "출처 미상"
                                     content_text = "\n".join(lines[1:])
-                                    
                                     st.markdown(f"**{i+1}. {source_line}**")
                                     st.caption(content_text[:200] + "..." if len(content_text) > 200 else content_text)
                                     st.divider()
 
-                    # 3. Risk Analyst (위험 분석가)
+                    # --- Risk Analyst ---
                     elif key == "risk_analyst":
                         score = value.get('risk_score', 0)
-                        # context에 아까 만든 final_report가 붙어있음. 그걸 파싱해서 보여주거나,
-                        # 더 깔끔하게 하려면 agent_graph에서 값을 따로 넘겨주는 게 좋지만,
-                        # 지금은 간편하게 context의 뒷부분(리포트)을 활용해 UI를 그림.
-                        
-                        # 리포트 추출 (간이 방식)
-                        report_content = value['context'].split("**🎯 Fine-Kinney 위험성 평가 결과**")[1]
-                        
+                        try:
+                            if "**🎯 Fine-Kinney 위험성 평가 결과**" in value['context']:
+                                report_content = value['context'].split("**🎯 Fine-Kinney 위험성 평가 결과**")[1]
+                            else:
+                                report_content = "상세 리포트 생성 실패"
+                        except:
+                            report_content = "분석 결과 없음"
+
                         with status_container:
                             if score >= 160:
                                 st.error(f"⚠️ **Risk Analyst:** 고위험 판정! (Score: {score})")
                             else:
                                 st.success(f"✅ **Risk Analyst:** 허용 가능 범위 (Score: {score})")
                             
-                            # 수식과 상세 내용을 카드 안에 예쁘게 출력
                             st.markdown("---")
                             st.markdown("**🎯 정량적 위험성 평가 (Fine-Kinney)**")
                             st.markdown(report_content, unsafe_allow_html=True)
-                            time.sleep(0.5)
 
-                    # 4. Admin Agent (행정관)
+                    # --- Admin Agent ---
                     elif key == "admin_agent":
                         with status_container:
                             st.write("📝 **Admin Agent:** 최종 결과 보고서 및 PDF를 생성 중입니다...")
                         final_res = value.get('final_output', "결과 생성 실패")
                         pdf_path = value.get('pdf_path', None)
 
-            status_text.empty() # 맨 위 상태 메시지 지우기
+            status_text.empty()
             
         except Exception as e:
             st.error(f"에러 발생: {e}")
 
-        # 최종 결과 카드 출력
+        # 최종 결과 출력
         if final_res:
             res_container = st.container(border=True)
             res_container.markdown(final_res)

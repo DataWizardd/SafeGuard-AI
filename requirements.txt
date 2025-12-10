@@ -8,3 +8,7 @@ python-dotenv
 streamlit
 tiktoken
 reportlab
+arize-phoenix
+openinference-instrumentation-langchain
+opentelemetry-sdk
+opentelemetry-exporter-otlp
